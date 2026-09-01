@@ -118,10 +118,10 @@ class MainActivity : AppCompatActivity() {
     private fun toggleVrMode() {
         vrMode = !vrMode
         binding.addressBar.visibility = if (vrMode) View.GONE else View.VISIBLE
-        setImmersive(vrMode)
+        applyImmersiveMode(vrMode)
     }
 
-    private fun setImmersive(enabled: Boolean) {
+    private fun applyImmersiveMode(enabled: Boolean) {
         if (enabled) {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                 window.insetsController?.let { controller ->
