@@ -14,41 +14,10 @@
         android:background="#1A1A1A"
         android:gravity="center_vertical">
 
-        <Button
-            android:id="@+id/backButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="←"
-            android:minWidth="0dp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp" />
-
-        <Button
-            android:id="@+id/forwardButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="→"
-            android:minWidth="0dp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp" />
-
-        <Button
-            android:id="@+id/refreshButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="⟳"
-            android:minWidth="0dp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp" />
-
-        <Button
-            android:id="@+id/homeButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="⌂"
-            android:minWidth="0dp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp" />
+        <Button android:id="@+id/backButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="←" android:minWidth="0dp" android:paddingStart="10dp" android:paddingEnd="10dp" />
+        <Button android:id="@+id/forwardButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="→" android:minWidth="0dp" android:paddingStart="10dp" android:paddingEnd="10dp" />
+        <Button android:id="@+id/refreshButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="⟳" android:minWidth="0dp" android:paddingStart="10dp" android:paddingEnd="10dp" />
+        <Button android:id="@+id/homeButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="⌂" android:minWidth="0dp" android:paddingStart="10dp" android:paddingEnd="10dp" />
 
         <EditText
             android:id="@+id/urlInput"
@@ -64,17 +33,67 @@
             android:background="@android:color/transparent"
             android:padding="8dp" />
 
-        <Button
-            android:id="@+id/goButton"
+        <Button android:id="@+id/goButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Go" />
+    </LinearLayout>
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#161616"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/tabsContainer"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Go" />
+            android:orientation="horizontal"
+            android:padding="4dp" />
+    </HorizontalScrollView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#161616"
+        android:padding="4dp"
+        android:gravity="center_vertical">
+
+        <Button android:id="@+id/bookmarkStarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="☆" android:minWidth="0dp" android:paddingStart="10dp" android:paddingEnd="10dp" />
+        <Button android:id="@+id/bookmarksListButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Bookmarks" />
+        <Button android:id="@+id/darkModeButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Dark" />
+        <Button android:id="@+id/ipdButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="IPD" />
+        <Button android:id="@+id/vrToggleButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="VR" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/ipdPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1A1A1A"
+        android:padding="8dp"
+        android:visibility="gone"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Eye spacing"
+            android:textColor="@android:color/white"
+            android:paddingEnd="8dp" />
+
+        <SeekBar
+            android:id="@+id/ipdSeekBar"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:max="120" />
 
         <Button
-            android:id="@+id/vrToggleButton"
+            android:id="@+id/ipdCloseButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="VR" />
+            android:text="Done" />
     </LinearLayout>
 
     <LinearLayout
@@ -84,6 +103,7 @@
         android:orientation="horizontal">
 
         <FrameLayout
+            android:id="@+id/leftPaneContainer"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1">
@@ -100,6 +120,7 @@
             android:background="#333333" />
 
         <FrameLayout
+            android:id="@+id/rightPaneContainer"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1">
