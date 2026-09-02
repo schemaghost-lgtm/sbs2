@@ -1,6 +1,9 @@
 package com.veil.sbsbrowser
 
 import android.annotation.SuppressLint
+import android.view.SurfaceView
+import android.view.TextureView
+import android.view.ViewGroup
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.Bundle
@@ -412,36 +415,61 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun findRenderSurface(view: View): View? {
+        if (view is TextureView || view is SurfaceView) return view
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val found = findRenderSurface(view.getChildAt(i))
+                if (found != null) return found
+            }
+        }
+        return null
+    }
+
     private fun startVideoMirrorCapture(source: View) {
-        if (android.os.Build.VERSION.SDK_INT < 31) return
         binding.mirrorView.useCapturedFrame = true
         val handler = Handler(mainLooper)
         pixelCopyHandler = handler
         val runnable = object : Runnable {
             override fun run() {
-                val v = customVideoView ?: return
-                if (v.width <= 0 || v.height <= 0) {
-                    handler.postDelayed(this, 33)
-                    return
-                }
-                val bmp = captureBitmap?.takeIf { it.width == v.width && it.height == v.height }
-                    ?: Bitmap.createBitmap(v.width, v.height, Bitmap.Config.ARGB_8888).also { captureBitmap = it }
-                try {
-                    PixelCopy.request(v, bmp, { result ->
-                        if (result == PixelCopy.SUCCESS) {
-                            binding.mirrorView.setCapturedFrame(bmp)
+                val root = customVideoView ?: return
+                when (val renderView = findRenderSurface(root)) {
+                    is TextureView -> {
+                        if (renderView.isAvailable) {
+                            renderView.bitmap?.let { binding.mirrorView.setCapturedFrame(it) }
                         }
-                    }, handler)
-                } catch (e: Exception) {
-                    // Skip this frame if the surface isn't copyable right now
+                        handler.postDelayed(this, 33)
+                    }
+                    is SurfaceView -> {
+                        val w = renderView.width
+                        val h = renderView.height
+                        if (w <= 0 || h <= 0) {
+                            handler.postDelayed(this, 33)
+                            return
+                        }
+                        val bmp = captureBitmap?.takeIf { it.width == w && it.height == h }
+                            ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { captureBitmap = it }
+                        try {
+                            PixelCopy.request(renderView, bmp, { result ->
+                                if (result == PixelCopy.SUCCESS) {
+                                    binding.mirrorView.setCapturedFrame(bmp)
+                                }
+                            }, handler)
+                        } catch (e: Exception) {
+                            // Skip this frame if the surface isn't copyable right now
+                        }
+                        handler.postDelayed(this, 33)
+                    }
+                    else -> {
+                        // No renderable surface found yet (video may still be loading); retry.
+                        handler.postDelayed(this, 200)
+                    }
                 }
-                handler.postDelayed(this, 33)
             }
         }
         pixelCopyRunnable = runnable
         handler.post(runnable)
     }
-
     private fun stopVideoMirrorCapture() {
         pixelCopyRunnable?.let { pixelCopyHandler?.removeCallbacks(it) }
         pixelCopyRunnable = null
