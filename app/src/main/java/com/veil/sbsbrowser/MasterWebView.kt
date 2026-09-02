@@ -21,4 +21,9 @@ class MasterWebView @JvmOverloads constructor(
         super.onDraw(canvas)
         mirror?.postInvalidateOnAnimation()
     }
+
+    override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
+        super.onScrollChanged(l, t, oldl, oldt)
+        mirror?.postInvalidateOnAnimation()
+    }
 }
