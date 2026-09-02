@@ -2,6 +2,7 @@ package com.veil.sbsbrowser
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Bundle
@@ -50,13 +51,12 @@ class MainActivity : AppCompatActivity() {
     private var customVideoView: View? = null
     private var customVideoCallback: WebChromeClient.CustomViewCallback? = null
 
-    // Unified mirror loop: periodically screenshots the left pane (whatever
-    // it currently holds -- normal page OR fullscreen video) straight off
-    // the window surface, and paints it into the right pane. Replaces the
-    // old draw-replay trick, which needed software rendering and caused
-    // both the scroll-blackout bug and the stutter.
+    // Mirror loop now self-schedules from inside the PixelCopy completion
+    // callback instead of a fixed timer, so the right pane can never get
+    // ahead of or behind the actual capture rate (fixes the half-speed
+    // stutter on the right side).
+    private var mirroring = false
     private var mirrorHandler: Handler? = null
-    private var mirrorRunnable: Runnable? = null
     private var mirrorBitmap: Bitmap? = null
     private val mirrorRect = Rect()
     private val mirrorLocation = IntArray(2)
@@ -75,6 +75,13 @@ class MainActivity : AppCompatActivity() {
 
         configureWebView(binding.webView)
         setupFullscreenVideoSupport()
+
+        // Swallow touches that land in gaps between buttons/fields inside
+        // these overlay panels, so nothing leaks through to the webview
+        // underneath -- the buttons themselves still get first dibs and
+        // consume their own taps normally.
+        binding.toolbarPanel.setOnTouchListener { _, _ -> true }
+        binding.keyboardOverlay.setOnTouchListener { _, _ -> true }
 
         binding.webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -116,10 +123,13 @@ class MainActivity : AppCompatActivity() {
             binding.ipdPanel.visibility = if (binding.ipdPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         }
         binding.ipdCloseButton.setOnClickListener { binding.ipdPanel.visibility = View.GONE }
-        binding.ipdSeekBar.progress = 60
+        styleSeekBar(binding.ipdSeekBar)
+        binding.ipdSeekBar.progress = prefs.getInt("ipd_progress", 60)
+        applyIpdOffset(binding.ipdSeekBar.progress - 60)
         binding.ipdSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 applyIpdOffset(progress - 60)
+                if (fromUser) prefs.edit().putInt("ipd_progress", progress).apply()
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
@@ -130,10 +140,13 @@ class MainActivity : AppCompatActivity() {
             binding.scalePanel.visibility = if (binding.scalePanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         }
         binding.scaleCloseButton.setOnClickListener { binding.scalePanel.visibility = View.GONE }
-        binding.scaleSeekBar.progress = 0
+        styleSeekBar(binding.scaleSeekBar)
+        binding.scaleSeekBar.progress = prefs.getInt("border_progress", 0)
+        applyScaleOffset(binding.scaleSeekBar.progress)
         binding.scaleSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 applyScaleOffset(progress)
+                if (fromUser) prefs.edit().putInt("border_progress", progress).apply()
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
@@ -141,6 +154,9 @@ class MainActivity : AppCompatActivity() {
 
         binding.keyboardButton.setOnClickListener { toggleVirtualKeyboard() }
         binding.vrToggleButton.setOnClickListener { toggleVrMode() }
+
+        darkModeOn = prefs.getBoolean("dark_mode", false)
+        binding.darkModeButton.text = if (darkModeOn) "Light" else "Dark"
 
         buildVirtualKeyboard()
         binding.keyboardOverlay.post {
@@ -150,6 +166,9 @@ class MainActivity : AppCompatActivity() {
 
         renderTabs()
         binding.webView.loadUrl(tabs[currentTabIndex].url)
+        // Dark mode needs to be (re)applied after the page starts loading
+        // since WebSettings can reset on navigation on some WebView versions.
+        applyDarkMode(darkModeOn)
     }
 
     override fun onResume() {
@@ -168,6 +187,12 @@ class MainActivity : AppCompatActivity() {
         settings.domStorageEnabled = true
         settings.loadWithOverviewMode = true
         settings.useWideViewPort = true
+    }
+
+    private fun styleSeekBar(seekBar: SeekBar) {
+        val color = 0xFFAAAAAA.toInt()
+        seekBar.progressTintList = ColorStateList.valueOf(color)
+        seekBar.thumbTintList = ColorStateList.valueOf(0xFFFFFFFF.toInt())
     }
 
     private fun resolveInputToUrl(raw: String): String {
@@ -247,12 +272,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun confirmCloseTab(index: Int) {
         if (tabs.size <= 1) return
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Close tab")
             .setMessage("Close \"${tabs[index].title}\"?")
             .setPositiveButton("Close") { _, _ -> closeTab(index) }
             .setNegativeButton("Cancel", null)
             .show()
+        styleDialogButtons(dialog)
     }
 
     private fun closeTab(index: Int) {
@@ -304,23 +330,33 @@ class MainActivity : AppCompatActivity() {
 
     private fun showBookmarksDialog() {
         if (bookmarks.isEmpty()) {
-            AlertDialog.Builder(this).setTitle("Bookmarks").setMessage("No bookmarks yet.").setPositiveButton("OK", null).show()
+            val dialog = AlertDialog.Builder(this).setTitle("Bookmarks").setMessage("No bookmarks yet.").setPositiveButton("OK", null).show()
+            styleDialogButtons(dialog)
             return
         }
         val titles = bookmarks.map { it.title }.toTypedArray()
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Bookmarks")
             .setItems(titles) { _, which ->
                 binding.webView.loadUrl(bookmarks[which].url)
             }
             .setNegativeButton("Close", null)
             .show()
+        styleDialogButtons(dialog)
+    }
+
+    private fun styleDialogButtons(dialog: AlertDialog) {
+        val white = 0xFFFFFFFF.toInt()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(white)
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(white)
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setTextColor(white)
     }
 
     private fun toggleDarkMode() {
         darkModeOn = !darkModeOn
         applyDarkMode(darkModeOn)
         binding.darkModeButton.text = if (darkModeOn) "Light" else "Dark"
+        prefs.edit().putBoolean("dark_mode", darkModeOn).apply()
     }
 
     private fun applyDarkMode(enabled: Boolean) {
@@ -424,49 +460,60 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // The view currently occupying the left pane -- normal page, or the
+    // native fullscreen video surface if one is active.
+    private fun currentLeftContentView(): View = customVideoView ?: binding.webView
+
     private fun startMirrorLoop() {
         if (android.os.Build.VERSION.SDK_INT < 26) return
-        if (mirrorRunnable != null) return
+        if (mirroring) return
+        mirroring = true
         binding.mirrorView.useCapturedFrame = true
         val handler = Handler(mainLooper)
         mirrorHandler = handler
-        val runnable = object : Runnable {
-            override fun run() {
-                captureLeftPaneFrame()
-                handler.postDelayed(this, 33)
-            }
-        }
-        mirrorRunnable = runnable
-        handler.post(runnable)
+        handler.post { captureLeftPaneFrame() }
     }
 
     private fun stopMirrorLoop() {
-        mirrorRunnable?.let { mirrorHandler?.removeCallbacks(it) }
-        mirrorRunnable = null
+        mirroring = false
         mirrorHandler = null
     }
 
     private fun captureLeftPaneFrame() {
-        val container = binding.leftPaneContainer
-        val w = container.width
-        val h = container.height
-        if (w <= 0 || h <= 0) return
+        if (!mirroring) return
+        val handler = mirrorHandler ?: return
 
-        container.getLocationInWindow(mirrorLocation)
+        // Capture only the actual content view (WebView or video surface),
+        // NOT its padded container -- otherwise the border padding gets
+        // applied twice on the right side (once from the source region,
+        // once from the destination pane's own padding).
+        val content = currentLeftContentView()
+        val w = content.width
+        val h = content.height
+        if (w <= 0 || h <= 0) {
+            handler.postDelayed({ captureLeftPaneFrame() }, 33)
+            return
+        }
+
+        content.getLocationInWindow(mirrorLocation)
         mirrorRect.set(mirrorLocation[0], mirrorLocation[1], mirrorLocation[0] + w, mirrorLocation[1] + h)
 
         val bmp = mirrorBitmap?.takeIf { it.width == w && it.height == h }
             ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { mirrorBitmap = it }
 
-        val handler = mirrorHandler ?: return
         try {
             PixelCopy.request(window, mirrorRect, bmp, { result ->
                 if (result == PixelCopy.SUCCESS) {
                     binding.mirrorView.setCapturedFrame(bmp)
                 }
+                // Schedule the NEXT capture only after this one actually
+                // completes, instead of a blind fixed timer -- this is
+                // what keeps the right pane in lockstep instead of
+                // drifting to half speed.
+                if (mirroring) handler.postDelayed({ captureLeftPaneFrame() }, 16)
             }, handler)
         } catch (e: Exception) {
-            // Skip this frame if the window surface isn't copyable right now
+            if (mirroring) handler.postDelayed({ captureLeftPaneFrame() }, 33)
         }
     }
 
@@ -482,7 +529,7 @@ class MainActivity : AppCompatActivity() {
                 isAllCaps = false
                 textSize = 14f
                 setTextColor(0xFFFFFFFF.toInt())
-                setBackgroundColor(0xFF2A2A2A.toInt())
+                setBackgroundColor(0xFF1F1F1F.toInt())
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
                     setMargins(2, 2, 2, 2)
                 }
@@ -538,12 +585,6 @@ class MainActivity : AppCompatActivity() {
     private fun hideVirtualKeyboard() {
         binding.keyboardOverlay.visibility = View.GONE
     }
-
-    // Typing into a page now goes through JS (document.execCommand) instead
-    // of raw Android KeyEvents, which modern WebView mostly ignores for
-    // page inputs. execCommand('insertText') is what most virtual-keyboard
-    // and testing tools use because it correctly fires the 'input' events
-    // that frameworks like YouTube's search box listen for.
 
     private fun typeChar(c: Char) {
         if (binding.urlInput.hasFocus()) {
