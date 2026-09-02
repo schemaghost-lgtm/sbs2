@@ -448,6 +448,10 @@ class MainActivity : AppCompatActivity() {
                     view,
                     FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
                 )
+
+                view.post {
+                    findSurfaceView(view)?.holder?.setFormat(PixelFormat.TRANSLUCENT)
+                }
             }
 
             override fun onHideCustomView() {
