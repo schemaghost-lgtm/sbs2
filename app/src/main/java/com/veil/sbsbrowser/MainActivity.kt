@@ -1,11 +1,9 @@
 package com.veil.sbsbrowser
 
 import android.annotation.SuppressLint
-import android.view.SurfaceView
-import android.view.TextureView
-import android.view.ViewGroup
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.Bundle
 import android.os.Handler
 import android.util.Patterns
@@ -51,9 +49,17 @@ class MainActivity : AppCompatActivity() {
 
     private var customVideoView: View? = null
     private var customVideoCallback: WebChromeClient.CustomViewCallback? = null
-    private var pixelCopyHandler: Handler? = null
-    private var pixelCopyRunnable: Runnable? = null
-    private var captureBitmap: Bitmap? = null
+
+    // Unified mirror loop: periodically screenshots the left pane (whatever
+    // it currently holds -- normal page OR fullscreen video) straight off
+    // the window surface, and paints it into the right pane. Replaces the
+    // old draw-replay trick, which needed software rendering and caused
+    // both the scroll-blackout bug and the stutter.
+    private var mirrorHandler: Handler? = null
+    private var mirrorRunnable: Runnable? = null
+    private var mirrorBitmap: Bitmap? = null
+    private val mirrorRect = Rect()
+    private val mirrorLocation = IntArray(2)
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,9 +69,6 @@ class MainActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences("dreamland_prefs", Context.MODE_PRIVATE)
         loadBookmarks()
-
-        binding.webView.mirror = binding.mirrorView
-        binding.mirrorView.source = binding.webView
 
         binding.leftKeyboardHost.mirror = binding.rightKeyboardHost
         binding.rightKeyboardHost.source = binding.leftKeyboardHost
@@ -147,6 +150,16 @@ class MainActivity : AppCompatActivity() {
 
         renderTabs()
         binding.webView.loadUrl(tabs[currentTabIndex].url)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        startMirrorLoop()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopMirrorLoop()
     }
 
     private fun configureWebView(webView: WebView) {
@@ -396,18 +409,14 @@ class MainActivity : AppCompatActivity() {
                     view,
                     FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
                 )
-
-                startVideoMirrorCapture(view)
             }
 
             override fun onHideCustomView() {
-                stopVideoMirrorCapture()
                 customVideoView?.let { binding.leftPaneContainer.removeView(it) }
                 binding.leftPaneContainer.addView(
                     binding.webView,
                     FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
                 )
-                binding.mirrorView.useCapturedFrame = false
                 customVideoCallback?.onCustomViewHidden()
                 customVideoView = null
                 customVideoCallback = null
@@ -415,65 +424,50 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun findRenderSurface(view: View): View? {
-        if (view is TextureView || view is SurfaceView) return view
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                val found = findRenderSurface(view.getChildAt(i))
-                if (found != null) return found
-            }
-        }
-        return null
-    }
-
-    private fun startVideoMirrorCapture(source: View) {
+    private fun startMirrorLoop() {
+        if (android.os.Build.VERSION.SDK_INT < 26) return
+        if (mirrorRunnable != null) return
         binding.mirrorView.useCapturedFrame = true
         val handler = Handler(mainLooper)
-        pixelCopyHandler = handler
+        mirrorHandler = handler
         val runnable = object : Runnable {
             override fun run() {
-                val root = customVideoView ?: return
-                when (val renderView = findRenderSurface(root)) {
-                    is TextureView -> {
-                        if (renderView.isAvailable) {
-                            renderView.bitmap?.let { binding.mirrorView.setCapturedFrame(it) }
-                        }
-                        handler.postDelayed(this, 33)
-                    }
-                    is SurfaceView -> {
-                        val w = renderView.width
-                        val h = renderView.height
-                        if (w <= 0 || h <= 0) {
-                            handler.postDelayed(this, 33)
-                            return
-                        }
-                        val bmp = captureBitmap?.takeIf { it.width == w && it.height == h }
-                            ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { captureBitmap = it }
-                        try {
-                            PixelCopy.request(renderView, bmp, { result ->
-                                if (result == PixelCopy.SUCCESS) {
-                                    binding.mirrorView.setCapturedFrame(bmp)
-                                }
-                            }, handler)
-                        } catch (e: Exception) {
-                            // Skip this frame if the surface isn't copyable right now
-                        }
-                        handler.postDelayed(this, 33)
-                    }
-                    else -> {
-                        // No renderable surface found yet (video may still be loading); retry.
-                        handler.postDelayed(this, 200)
-                    }
-                }
+                captureLeftPaneFrame()
+                handler.postDelayed(this, 33)
             }
         }
-        pixelCopyRunnable = runnable
+        mirrorRunnable = runnable
         handler.post(runnable)
     }
-    private fun stopVideoMirrorCapture() {
-        pixelCopyRunnable?.let { pixelCopyHandler?.removeCallbacks(it) }
-        pixelCopyRunnable = null
-        pixelCopyHandler = null
+
+    private fun stopMirrorLoop() {
+        mirrorRunnable?.let { mirrorHandler?.removeCallbacks(it) }
+        mirrorRunnable = null
+        mirrorHandler = null
+    }
+
+    private fun captureLeftPaneFrame() {
+        val container = binding.leftPaneContainer
+        val w = container.width
+        val h = container.height
+        if (w <= 0 || h <= 0) return
+
+        container.getLocationInWindow(mirrorLocation)
+        mirrorRect.set(mirrorLocation[0], mirrorLocation[1], mirrorLocation[0] + w, mirrorLocation[1] + h)
+
+        val bmp = mirrorBitmap?.takeIf { it.width == w && it.height == h }
+            ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { mirrorBitmap = it }
+
+        val handler = mirrorHandler ?: return
+        try {
+            PixelCopy.request(window, mirrorRect, bmp, { result ->
+                if (result == PixelCopy.SUCCESS) {
+                    binding.mirrorView.setCapturedFrame(bmp)
+                }
+            }, handler)
+        } catch (e: Exception) {
+            // Skip this frame if the window surface isn't copyable right now
+        }
     }
 
     private fun buildVirtualKeyboard() {
@@ -545,14 +539,19 @@ class MainActivity : AppCompatActivity() {
         binding.keyboardOverlay.visibility = View.GONE
     }
 
+    // Typing into a page now goes through JS (document.execCommand) instead
+    // of raw Android KeyEvents, which modern WebView mostly ignores for
+    // page inputs. execCommand('insertText') is what most virtual-keyboard
+    // and testing tools use because it correctly fires the 'input' events
+    // that frameworks like YouTube's search box listen for.
+
     private fun typeChar(c: Char) {
         if (binding.urlInput.hasFocus()) {
             val start = binding.urlInput.selectionStart.coerceAtLeast(0)
             val end = binding.urlInput.selectionEnd.coerceAtLeast(0)
             binding.urlInput.text.replace(minOf(start, end), maxOf(start, end), c.toString())
         } else {
-            val keyCode = charToKeyCode(c) ?: return
-            dispatchKeyToWebView(keyCode)
+            injectTextIntoPage(c.toString())
         }
     }
 
@@ -562,7 +561,7 @@ class MainActivity : AppCompatActivity() {
             val end = binding.urlInput.selectionEnd.coerceAtLeast(0)
             binding.urlInput.text.replace(minOf(start, end), maxOf(start, end), " ")
         } else {
-            dispatchKeyToWebView(KeyEvent.KEYCODE_SPACE)
+            injectTextIntoPage(" ")
         }
     }
 
@@ -571,7 +570,9 @@ class MainActivity : AppCompatActivity() {
             val start = binding.urlInput.selectionStart
             if (start > 0) binding.urlInput.text.delete(start - 1, start)
         } else {
-            dispatchKeyToWebView(KeyEvent.KEYCODE_DEL)
+            binding.webView.evaluateJavascript(
+                "(function(){document.execCommand('delete');})();", null
+            )
         }
     }
 
@@ -579,24 +580,25 @@ class MainActivity : AppCompatActivity() {
         if (binding.urlInput.hasFocus()) {
             loadFromInput()
         } else {
-            dispatchKeyToWebView(KeyEvent.KEYCODE_ENTER)
+            val js = """
+                (function(){
+                    var el = document.activeElement;
+                    if (!el) return;
+                    var ev = new KeyboardEvent('keydown', {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true});
+                    el.dispatchEvent(ev);
+                    if (el.form) {
+                        if (el.form.requestSubmit) { el.form.requestSubmit(); } else { el.form.submit(); }
+                    }
+                })();
+            """.trimIndent()
+            binding.webView.evaluateJavascript(js, null)
         }
     }
 
-    private fun dispatchKeyToWebView(keyCode: Int) {
-        val eventTime = android.os.SystemClock.uptimeMillis()
-        binding.webView.dispatchKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyCode, 0))
-        binding.webView.dispatchKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0))
-    }
-
-    private fun charToKeyCode(c: Char): Int? {
-        return when {
-            c in 'a'..'z' -> KeyEvent.KEYCODE_A + (c - 'a')
-            c in '0'..'9' -> KeyEvent.KEYCODE_0 + (c - '0')
-            c == '.' -> KeyEvent.KEYCODE_PERIOD
-            c == '/' -> KeyEvent.KEYCODE_SLASH
-            else -> null
-        }
+    private fun injectTextIntoPage(text: String) {
+        val escaped = text.replace("\\", "\\\\").replace("'", "\\'")
+        val js = "(function(){document.execCommand('insertText', false, '$escaped');})();"
+        binding.webView.evaluateJavascript(js, null)
     }
 
     override fun onBackPressed() {
