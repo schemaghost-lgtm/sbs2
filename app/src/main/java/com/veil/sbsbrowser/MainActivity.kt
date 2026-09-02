@@ -2,6 +2,9 @@ package com.veil.sbsbrowser
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.PixelFormat
+import android.view.SurfaceView
+import android.view.ViewGroup
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Rect
