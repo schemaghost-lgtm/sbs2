@@ -486,38 +486,51 @@ class MainActivity : AppCompatActivity() {
         if (!mirroring) return
         val handler = mirrorHandler ?: return
 
-        // Capture only the actual content view (WebView or video surface),
-        // NOT its padded container -- otherwise the border padding gets
-        // applied twice on the right side (once from the source region,
-        // once from the destination pane's own padding).
         val content = currentLeftContentView()
-        val w = content.width
-        val h = content.height
-        if (w <= 0 || h <= 0) {
+        val fullW = content.width
+        val fullH = content.height
+        if (fullW <= 0 || fullH <= 0) {
             handler.postDelayed({ captureLeftPaneFrame() }, 33)
             return
         }
 
         content.getLocationInWindow(mirrorLocation)
-        mirrorRect.set(mirrorLocation[0], mirrorLocation[1], mirrorLocation[0] + w, mirrorLocation[1] + h)
+        mirrorRect.set(mirrorLocation[0], mirrorLocation[1], mirrorLocation[0] + fullW, mirrorLocation[1] + fullH)
 
-        val bmp = mirrorBitmap?.takeIf { it.width == w && it.height == h }
-            ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { mirrorBitmap = it }
+        // Capture at reduced resolution -- far less data to copy per frame,
+        // and the mirror pane upscales it to fill the view anyway, so the
+        // visual difference on a phone screen is minimal.
+        val scale = 0.65f
+        val capW = (fullW * scale).toInt().coerceAtLeast(1)
+        val capH = (fullH * scale).toInt().coerceAtLeast(1)
+
+        val bmp = mirrorBitmap?.takeIf { it.width == capW && it.height == capH }
+            ?: Bitmap.createBitmap(capW, capH, Bitmap.Config.RGB_565).also { mirrorBitmap = it }
 
         try {
             PixelCopy.request(window, mirrorRect, bmp, { result ->
                 if (result == PixelCopy.SUCCESS) {
                     binding.mirrorView.setCapturedFrame(bmp)
                 }
-                // Schedule the NEXT capture only after this one actually
-                // completes, instead of a blind fixed timer -- this is
-                // what keeps the right pane in lockstep instead of
-                // drifting to half speed.
-                if (mirroring) handler.postDelayed({ captureLeftPaneFrame() }, 16)
+                // Re-fire as soon as this capture actually finishes -- no
+                // artificial delay -- so the loop runs at whatever the real
+                // achievable rate is instead of an arbitrary cap.
+                if (mirroring) handler.post { captureLeftPaneFrame() }
             }, handler)
         } catch (e: Exception) {
             if (mirroring) handler.postDelayed({ captureLeftPaneFrame() }, 33)
         }
+    }
+
+    private fun findSurfaceView(view: View): SurfaceView? {
+        if (view is SurfaceView) return view
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val found = findSurfaceView(view.getChildAt(i))
+                if (found != null) return found
+            }
+        }
+        return null
     }
 
     private fun buildVirtualKeyboard() {
